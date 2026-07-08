@@ -1,12 +1,18 @@
 import { chromium } from "playwright";
 
 const PANEL_URL = "https://stockcharts.com/panels/";
+const LOGIN_URL = "https://stockcharts.com/login/";
 const TARGET_TITLE = "Advancers & Decliners";
 
 function requireEnv(name) {
   const v = process.env[name];
   if (!v) throw new Error(`Missing required env var: ${name}`);
   return v;
+}
+
+function optionalEnv(name) {
+  const v = process.env[name];
+  return v && String(v).trim() ? String(v) : null;
 }
 
 function nowStampHk() {
@@ -21,6 +27,82 @@ function nowStampHk() {
     hour12: false,
   });
   return fmt.format(dt).replaceAll("/", "-").replace(", ", " ");
+}
+
+async function ensureLoggedIn(page) {
+  const username = optionalEnv("STOCKCHARTS_USERNAME");
+  const password = optionalEnv("STOCKCHARTS_PASSWORD");
+
+  if (!username || !password) return; // allow public mode (will likely fail for members-only pages)
+
+  // If already logged in, do nothing.
+  const alreadyLoggedIn = await page
+    .locator("text=/logout/i")
+    .first()
+    .isVisible()
+    .catch(() => false);
+  if (alreadyLoggedIn) return;
+
+  await page.goto(LOGIN_URL, { waitUntil: "domcontentloaded" });
+  await page.waitForLoadState("networkidle").catch(() => {});
+
+  // Try common form patterns: labels, placeholders, ids/names.
+  const userFieldCandidates = [
+    page.getByLabel(/user(name)?|email/i),
+    page.locator('input[name="username"]'),
+    page.locator('input[name="email"]'),
+    page.locator('input[type="email"]'),
+    page.locator('input[type="text"]'),
+  ];
+
+  const passFieldCandidates = [
+    page.getByLabel(/pass(word)?/i),
+    page.locator('input[name="password"]'),
+    page.locator('input[type="password"]'),
+  ];
+
+  async function firstVisible(cands) {
+    for (const c of cands) {
+      const loc = c.first();
+      const ok = await loc.isVisible().catch(() => false);
+      if (ok) return loc;
+    }
+    return null;
+  }
+
+  const userField = await firstVisible(userFieldCandidates);
+  const passField = await firstVisible(passFieldCandidates);
+  if (!userField || !passField) {
+    throw new Error(
+      "Could not find login form fields on StockCharts login page. The page layout may have changed."
+    );
+  }
+
+  await userField.fill(username);
+  await passField.fill(password);
+
+  const submitCandidates = [
+    page.getByRole("button", { name: /log in|sign in/i }),
+    page.locator('button[type="submit"]'),
+    page.locator('input[type="submit"]'),
+  ];
+  const submit = await firstVisible(submitCandidates);
+  if (!submit) throw new Error("Could not find login submit button on StockCharts login page.");
+
+  await Promise.all([
+    page.waitForLoadState("domcontentloaded").catch(() => {}),
+    submit.click(),
+  ]);
+
+  // Give the site a moment to establish session and redirect.
+  await page.waitForLoadState("networkidle").catch(() => {});
+
+  const loginError = await page
+    .locator("text=/invalid|incorrect|failed|error/i")
+    .first()
+    .isVisible()
+    .catch(() => false);
+  if (loginError) throw new Error("StockCharts login appears to have failed (error message detected).");
 }
 
 async function findPanelByHeading(page, headingText) {
@@ -98,6 +180,8 @@ async function main() {
 
   const page = await context.newPage();
   page.setDefaultTimeout(30_000);
+
+  await ensureLoggedIn(page);
 
   await page.goto(PANEL_URL, { waitUntil: "domcontentloaded" });
   await page.waitForLoadState("networkidle").catch(() => {});

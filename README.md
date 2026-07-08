@@ -8,13 +8,18 @@
 
 - 在 Discord：目標頻道 → **Edit Channel** → **Integrations** → **Webhooks** → **New Webhook** → **Copy Webhook URL**
 
-### 2) GitHub Secrets
+### 2) StockCharts 會員帳號（用來登入 panels）
+
+因為 `https://stockcharts.com/panels/` 需要會員登入，這個 workflow 會先自動登入再截圖。
+
+### 3) GitHub Secrets
 
 在你的 GitHub repo：
 
 - Settings → Secrets and variables → Actions → **New repository secret**
-- 名稱：`DISCORD_WEBHOOK_URL`
-- 值：貼上你的 Discord Webhook URL
+- `DISCORD_WEBHOOK_URL`：貼上你的 Discord Webhook URL
+- `STOCKCHARTS_USERNAME`：你的 StockCharts 登入帳號（或 email）
+- `STOCKCHARTS_PASSWORD`：你的 StockCharts 密碼
 
 ## 觸發方式
 

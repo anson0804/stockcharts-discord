@@ -20,7 +20,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "24"
           cache: "npm"
 
       - name: Install dependencies
@@ -32,5 +32,7 @@ jobs:
       - name: Post to Discord
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          STOCKCHARTS_USERNAME: ${{ secrets.STOCKCHARTS_USERNAME }}
+          STOCKCHARTS_PASSWORD: ${{ secrets.STOCKCHARTS_PASSWORD }}
         run: npm run post
 

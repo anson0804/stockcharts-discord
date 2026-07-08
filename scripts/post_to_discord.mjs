@@ -106,13 +106,10 @@ async function ensureLoggedIn(page) {
 }
 
 async function ensureAdvDeclPanelEnabled(page) {
-  // If the panel is already present, nothing to do.
-  const alreadyPresent = await page
-    .getByText(TARGET_TITLE, { exact: false })
-    .first()
-    .isVisible()
-    .catch(() => false);
-  if (alreadyPresent) return;
+  // If the panel exists anywhere in the DOM, nothing to do.
+  // (On headless runs it may be below the fold, so `isVisible()` can be false.)
+  const titleCount = await page.getByText(TARGET_TITLE, { exact: false }).count().catch(() => 0);
+  if (titleCount > 0) return;
 
   // Open settings dropdown (gear icon).
   const settingsBtn = page.locator("#settings-button").first();
@@ -160,8 +157,9 @@ async function ensureAdvDeclPanelEnabled(page) {
   }
 
   // Find the "Advancers & Decliners" row and enable it.
+  // Don't require visible; it might be in a scrollable list.
   const advText = page.getByText(TARGET_TITLE, { exact: false }).first();
-  await advText.waitFor({ state: "visible", timeout: 20_000 });
+  await advText.waitFor({ state: "attached", timeout: 20_000 });
 
   // Try common enable controls near the row: checkbox/toggle, Add/Enable button.
   const rowContainer = await advText.elementHandle();

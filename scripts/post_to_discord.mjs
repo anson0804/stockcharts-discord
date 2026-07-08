@@ -100,41 +100,12 @@ async function warmUpDashboard(page) {
   }
 }
 
-async function getDocumentBox(locator) {
-  await locator.scrollIntoViewIfNeeded().catch(() => {});
-  return locator.evaluate((el) => {
-    const r = el.getBoundingClientRect();
-    return {
-      x: r.left + window.scrollX,
-      y: r.top + window.scrollY,
-      width: r.width,
-      height: r.height,
-    };
-  });
-}
-
-async function screenshotCombinedPanels(page, selectors) {
-  const boxes = [];
-  for (const sel of selectors) {
-    const loc = page.locator(sel).first();
-    if ((await loc.count().catch(() => 0)) === 0) return null;
-    const box = await getDocumentBox(loc);
-    if (box) boxes.push(box);
-  }
-  if (boxes.length === 0) return null;
-
-  const pad = 8;
-  const minX = Math.min(...boxes.map((b) => b.x)) - pad;
-  const minY = Math.min(...boxes.map((b) => b.y)) - pad;
-  const maxX = Math.max(...boxes.map((b) => b.x + b.width)) + pad;
-  const maxY = Math.max(...boxes.map((b) => b.y + b.height)) + pad;
-
-  await page.waitForTimeout(300);
-  return await page.screenshot({
-    type: "png",
-    fullPage: true,
-    clip: { x: minX, y: minY, width: maxX - minX, height: maxY - minY },
-  });
+async function screenshotPanel(page, selector) {
+  const loc = page.locator(selector).first();
+  if ((await loc.count().catch(() => 0)) === 0) return null;
+  await loc.scrollIntoViewIfNeeded().catch(() => {});
+  await page.waitForTimeout(400);
+  return loc.screenshot({ type: "png" });
 }
 
 async function postDiscordWebhook({ webhookUrl, content, files }) {
@@ -175,41 +146,40 @@ async function main() {
 
   await warmUpDashboard(page);
 
-  const panelSelectors = [MARKET_FACTORS_PANEL, BREADTH_PANEL];
+  // 1) Market Factors
+  const marketFactorsPng = await screenshotPanel(page, MARKET_FACTORS_PANEL);
 
-  // Image 1: Market Factors + Breadth (ADVANCING / DECLINING tab, default)
-  const advDecPng = await screenshotCombinedPanels(page, panelSelectors);
-  if (!advDecPng) {
-    const png = await page.screenshot({ fullPage: true, type: "png" });
-    const stamp = nowStampHk();
-    await postDiscordWebhook({
-      webhookUrl,
-      content: `StockCharts market summary (${stamp} HK) — couldn't locate Market Factors + Breadth panels. Sending full page.`,
-      files: [{ filename: "stockcharts-marketsummary.png", bytes: png }],
-    });
-    return;
-  }
+  // 2) Breadth – ADVANCING / DECLINING (default tab)
+  const breadthAdvDecPng = await screenshotPanel(page, BREADTH_PANEL);
 
-  // Image 2: click SECTOR ADV / DEC tab, then screenshot again
+  // 3) Breadth – SECTOR ADV / DEC
   const sectorTab = page.locator(SECTOR_TAB).first();
   if ((await sectorTab.count().catch(() => 0)) === 0) {
     throw new Error('Could not find "SECTOR ADV / DEC" tab.');
   }
   await sectorTab.click();
   await page.waitForTimeout(600);
+  const breadthSectorPng = await screenshotPanel(page, BREADTH_PANEL);
 
-  const sectorPng = await screenshotCombinedPanels(page, panelSelectors);
-  if (!sectorPng) {
-    throw new Error("Could not capture Market Factors + Breadth after switching to SECTOR ADV / DEC.");
+  if (!marketFactorsPng || !breadthAdvDecPng || !breadthSectorPng) {
+    const png = await page.screenshot({ fullPage: true, type: "png" });
+    const stamp = nowStampHk();
+    await postDiscordWebhook({
+      webhookUrl,
+      content: `StockCharts market summary (${stamp} HK) — couldn't capture all panels. Sending full page.`,
+      files: [{ filename: "stockcharts-marketsummary.png", bytes: png }],
+    });
+    return;
   }
 
   const stamp = nowStampHk();
   await postDiscordWebhook({
     webhookUrl,
-    content: `**Market Factors + Breadth** (${stamp} HK)\n1) ADVANCING / DECLINING\n2) SECTOR ADV / DEC`,
+    content: `**Market Summary** (${stamp} HK)\n1) Market Factors\n2) Breadth – ADVANCING / DECLINING\n3) Breadth – SECTOR ADV / DEC`,
     files: [
-      { filename: "market-factors-breadth-adv-dec.png", bytes: advDecPng },
-      { filename: "market-factors-breadth-sector.png", bytes: sectorPng },
+      { filename: "market-factors.png", bytes: marketFactorsPng },
+      { filename: "breadth-adv-dec.png", bytes: breadthAdvDecPng },
+      { filename: "breadth-sector-adv-dec.png", bytes: breadthSectorPng },
     ],
   });
 

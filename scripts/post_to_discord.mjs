@@ -157,24 +157,24 @@ async function ensureAdvDeclPanelEnabled(page) {
   await dialog.first().waitFor({ state: "visible", timeout: 20_000 }).catch(() => {});
 
   // Go to "Additional Data Panels" section/tab.
-  const additionalTabCandidates = [
-    page.getByRole("tab", { name: /additional data panels/i }),
-    page.getByRole("button", { name: /additional data panels/i }),
-    page.getByText(/additional data panels/i),
-  ];
+  // IMPORTANT: This link is inside the modal (not the page), and may require scrolling.
+  const additionalLink = dialog.getByText(/additional data panels/i).first();
+  let openedAdditional = (await additionalLink.isVisible().catch(() => false)) || (await additionalLink.count()) > 0;
 
-  let openedAdditional = false;
-  for (const loc of additionalTabCandidates) {
-    const l = loc.first();
-    if (await l.isVisible().catch(() => false)) {
-      await l.click().catch(() => {});
-      openedAdditional = true;
-      break;
+  if (!openedAdditional) {
+    const scrollable = await findFirstScrollableInDialog();
+    for (let i = 0; i < 10 && !(await additionalLink.count().catch(() => 0)); i++) {
+      if (scrollable) {
+        await scrollable.evaluate((el) => (el.scrollTop = Math.min(el.scrollTop + el.clientHeight * 0.9, el.scrollHeight)));
+      } else {
+        await page.keyboard.press("PageDown").catch(() => {});
+      }
+      await page.waitForTimeout(200);
     }
   }
-  if (!openedAdditional) {
-    throw new Error('Could not find "Additional Data Panels" in Dashboard Preferences.');
-  }
+
+  await additionalLink.waitFor({ state: "attached", timeout: 10_000 });
+  await additionalLink.click().catch(() => {});
 
   // Find the "Advancers & Decliners" row and enable it.
   // The list can be scrollable/virtualized; scroll the dialog until it appears.

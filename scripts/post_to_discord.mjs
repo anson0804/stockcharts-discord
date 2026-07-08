@@ -1,6 +1,6 @@
 import { chromium } from "playwright";
 
-const MARKET_SUMMARY_URL = "https://stockcharts.com/freecharts/marketsummary.html";
+const PANELS_URL = "https://stockcharts.com/panels/";
 const LOGIN_URL = "https://stockcharts.com/login/";
 const TARGET_TITLE = "Advancers & Decliners";
 
@@ -91,7 +91,7 @@ async function ensureLoggedIn(page) {
 }
 
 async function ensureAdvDeclPanelEnabled(page) {
-  // No-op for public market summary.
+  // No-op: configure dashboard once in the UI.
   void page;
 }
 
@@ -280,34 +280,36 @@ async function main() {
   const page = await context.newPage();
   page.setDefaultTimeout(30_000);
 
-  await page.goto(MARKET_SUMMARY_URL, { waitUntil: "domcontentloaded" });
+  await ensureLoggedIn(page);
+
+  await page.goto(PANELS_URL, { waitUntil: "domcontentloaded" });
   await page.waitForLoadState("networkidle").catch(() => {});
 
   await warmUpDashboard(page);
 
-  const section = await findSectionByHeading(page, TARGET_TITLE);
-  if (!section) {
+  // Screenshot both A&D panels (Indexes + Sectors) as one combined clip.
+  const combined = await screenshotAllPanelsByTitle(page, TARGET_TITLE);
+  if (!combined) {
     const png = await page.screenshot({ fullPage: true, type: "png" });
+    const titles = await listDashboardPanelTitles(page).catch(() => []);
     const stamp = nowStampHk();
     await postDiscordWebhook({
       webhookUrl,
-      content: `StockCharts market summary (${stamp} HK) — couldn't locate **${TARGET_TITLE}** section. Sending full page.`,
-      filename: "stockcharts-marketsummary.png",
+      content: `StockCharts panels (${stamp} HK) — couldn't find **${TARGET_TITLE}** panels.\nFound panels: ${titles.join(
+        ", "
+      )}`.slice(0, 1900),
+      filename: "stockcharts-panels.png",
       fileBytes: png,
     });
     return;
   }
-
-  await section.scrollIntoViewIfNeeded().catch(() => {});
-  await page.waitForTimeout(500);
-  const png = await section.screenshot({ type: "png" });
 
   const stamp = nowStampHk();
   await postDiscordWebhook({
     webhookUrl,
     content: `**${TARGET_TITLE}** (${stamp} HK)`,
     filename: "advancers-decliners.png",
-    fileBytes: png,
+    fileBytes: combined,
   });
 
   await browser.close();

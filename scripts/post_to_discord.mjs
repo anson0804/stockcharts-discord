@@ -111,6 +111,26 @@ async function ensureAdvDeclPanelEnabled(page) {
   const titleCount = await page.getByText(TARGET_TITLE, { exact: false }).count().catch(() => 0);
   if (titleCount > 0) return;
 
+  async function findFirstScrollableInDialog() {
+    const dlg = page.getByRole("dialog").first();
+    const handle = await dlg
+      .evaluateHandle((root) => {
+        const all = Array.from(root.querySelectorAll("*"));
+        const scrollables = all.filter((el) => {
+          const style = window.getComputedStyle(el);
+          const overflowY = style.overflowY;
+          const canScroll =
+            (overflowY === "auto" || overflowY === "scroll") && el.scrollHeight > el.clientHeight + 20;
+          return canScroll;
+        });
+        // Prefer the largest scrollable (usually the list container).
+        scrollables.sort((a, b) => b.clientHeight - a.clientHeight);
+        return scrollables[0] || null;
+      })
+      .catch(() => null);
+    return handle && handle.asElement ? handle.asElement() : null;
+  }
+
   // Open settings dropdown (gear icon).
   const settingsBtn = page.locator("#settings-button").first();
   await settingsBtn.waitFor({ state: "visible", timeout: 20_000 });
@@ -157,9 +177,31 @@ async function ensureAdvDeclPanelEnabled(page) {
   }
 
   // Find the "Advancers & Decliners" row and enable it.
-  // Don't require visible; it might be in a scrollable list.
-  const advText = page.getByText(TARGET_TITLE, { exact: false }).first();
-  await advText.waitFor({ state: "attached", timeout: 20_000 });
+  // The list can be scrollable/virtualized; scroll the dialog until it appears.
+  const advText = dialog.getByText(TARGET_TITLE, { exact: false }).first();
+  let found = (await advText.count().catch(() => 0)) > 0;
+  if (!found) {
+    const scrollable = await findFirstScrollableInDialog();
+    for (let i = 0; i < 14 && !found; i++) {
+      if (scrollable) {
+        await scrollable.evaluate((el) => {
+          el.scrollTop = Math.min(el.scrollTop + el.clientHeight * 0.9, el.scrollHeight);
+        });
+      } else {
+        // Fallback: PageDown to attempt scrolling within modal.
+        await page.keyboard.press("PageDown").catch(() => {});
+      }
+      await page.waitForTimeout(250);
+      found = (await advText.count().catch(() => 0)) > 0;
+    }
+  }
+
+  if (!found) {
+    // Give up enabling; caller will fall back to full page screenshot.
+    throw new Error(
+      `Could not find "${TARGET_TITLE}" inside Dashboard Preferences > Additional Data Panels.`
+    );
+  }
 
   // Try common enable controls near the row: checkbox/toggle, Add/Enable button.
   const rowContainer = await advText.elementHandle();
@@ -360,7 +402,22 @@ async function main() {
   await page.waitForLoadState("networkidle").catch(() => {});
 
   // Some dashboards require enabling the panel via settings before it appears.
-  await ensureAdvDeclPanelEnabled(page);
+  try {
+    await ensureAdvDeclPanelEnabled(page);
+  } catch (e) {
+    // Don't fail the whole workflow; send a debug screenshot so we can refine selectors.
+    const png = await page.screenshot({ fullPage: true, type: "png" }).catch(() => null);
+    if (png) {
+      const stamp = nowStampHk();
+      await postDiscordWebhook({
+        webhookUrl,
+        content: `StockCharts (${stamp} HK) — couldn't enable **${TARGET_TITLE}** panel automatically. Sending debug screenshot.`,
+        filename: "stockcharts-debug.png",
+        fileBytes: png,
+      });
+    }
+    throw e;
+  }
   await page.waitForLoadState("networkidle").catch(() => {});
 
   // Goal: capture all "Advancers & Decliners" panels (e.g. Indexes + Sectors) as one combined screenshot.

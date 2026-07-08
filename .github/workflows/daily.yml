@@ -12,7 +12,7 @@ permissions:
 jobs:
   post:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 5
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -26,8 +26,14 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('package-lock.json') }}
+
       - name: Install Playwright Chromium
-        run: npm run install-browsers
+        run: npx playwright install chromium
 
       - name: Post to Discord
         env:

@@ -1,4 +1,5 @@
 import { chromium } from "playwright";
+import sharp from "sharp";
 
 const MARKET_SUMMARY_URL = "https://stockcharts.com/freecharts/marketsummary.html";
 const LOGIN_URL = "https://stockcharts.com/login/";
@@ -108,12 +109,45 @@ async function screenshotPanel(page, selector) {
   return loc.screenshot({ type: "png" });
 }
 
-async function postDiscordWebhook({ webhookUrl, content, files }) {
+async function stitchHorizontal(buffers, gap = 12) {
+  const metas = await Promise.all(
+    buffers.map(async (buf) => {
+      const meta = await sharp(buf).metadata();
+      return { buf, width: meta.width ?? 0, height: meta.height ?? 0 };
+    })
+  );
+
+  const totalWidth = metas.reduce((sum, img) => sum + img.width, 0) + gap * (metas.length - 1);
+  const maxHeight = Math.max(...metas.map((img) => img.height));
+
+  const composites = [];
+  let left = 0;
+  for (const img of metas) {
+    composites.push({
+      input: img.buf,
+      left,
+      top: Math.floor((maxHeight - img.height) / 2),
+    });
+    left += img.width + gap;
+  }
+
+  return sharp({
+    create: {
+      width: totalWidth,
+      height: maxHeight,
+      channels: 4,
+      background: { r: 245, g: 245, b: 245, alpha: 1 },
+    },
+  })
+    .composite(composites)
+    .png()
+    .toBuffer();
+}
+
+async function postDiscordWebhook({ webhookUrl, content, filename, fileBytes }) {
   const form = new FormData();
-  form.set("payload_json", JSON.stringify({ content }));
-  files.forEach((f, i) => {
-    form.append(`files[${i}]`, new Blob([f.bytes], { type: "image/png" }), f.filename);
-  });
+  form.set("content", content);
+  form.append("file", new Blob([fileBytes], { type: "image/png" }), filename);
 
   const resp = await fetch(webhookUrl, { method: "POST", body: form });
   if (!resp.ok) {
@@ -167,20 +201,20 @@ async function main() {
     await postDiscordWebhook({
       webhookUrl,
       content: `StockCharts market summary (${stamp} HK) — couldn't capture all panels. Sending full page.`,
-      files: [{ filename: "stockcharts-marketsummary.png", bytes: png }],
+      filename: "stockcharts-marketsummary.png",
+      fileBytes: png,
     });
     return;
   }
 
+  const combined = await stitchHorizontal([marketFactorsPng, breadthAdvDecPng, breadthSectorPng]);
+
   const stamp = nowStampHk();
   await postDiscordWebhook({
     webhookUrl,
-    content: `**Market Summary** (${stamp} HK)\n1) Market Factors\n2) Breadth – ADVANCING / DECLINING\n3) Breadth – SECTOR ADV / DEC`,
-    files: [
-      { filename: "market-factors.png", bytes: marketFactorsPng },
-      { filename: "breadth-adv-dec.png", bytes: breadthAdvDecPng },
-      { filename: "breadth-sector-adv-dec.png", bytes: breadthSectorPng },
-    ],
+    content: `**Market Summary** (${stamp} HK) — Market Factors | Adv/Dec | Sector Adv/Dec`,
+    filename: "market-summary-combined.png",
+    fileBytes: combined,
   });
 
   await browser.close();

@@ -9,7 +9,8 @@
     "install-browsers": "playwright install --with-deps chromium"
   },
   "dependencies": {
-    "playwright": "^1.55.0"
+    "playwright": "^1.55.0",
+    "sharp": "^0.34.3"
   }
 }
 

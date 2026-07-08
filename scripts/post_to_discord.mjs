@@ -4,6 +4,7 @@ const MARKET_SUMMARY_URL = "https://stockcharts.com/freecharts/marketsummary.htm
 const LOGIN_URL = "https://stockcharts.com/login/";
 const MARKET_FACTORS_PANEL = "#panel-market-factors";
 const BREADTH_PANEL = "#panel-breadth";
+const SECTOR_TAB = "#tab-sector-advance-decline";
 
 function requireEnv(name) {
   const v = process.env[name];
@@ -136,10 +137,12 @@ async function screenshotCombinedPanels(page, selectors) {
   });
 }
 
-async function postDiscordWebhook({ webhookUrl, content, filename, fileBytes }) {
+async function postDiscordWebhook({ webhookUrl, content, files }) {
   const form = new FormData();
-  form.set("content", content);
-  form.append("file", new Blob([fileBytes], { type: "image/png" }), filename);
+  form.set("payload_json", JSON.stringify({ content }));
+  files.forEach((f, i) => {
+    form.append(`files[${i}]`, new Blob([f.bytes], { type: "image/png" }), f.filename);
+  });
 
   const resp = await fetch(webhookUrl, { method: "POST", body: form });
   if (!resp.ok) {
@@ -172,28 +175,42 @@ async function main() {
 
   await warmUpDashboard(page);
 
-  const combined = await screenshotCombinedPanels(page, [
-    MARKET_FACTORS_PANEL,
-    BREADTH_PANEL,
-  ]);
-  if (!combined) {
+  const panelSelectors = [MARKET_FACTORS_PANEL, BREADTH_PANEL];
+
+  // Image 1: Market Factors + Breadth (ADVANCING / DECLINING tab, default)
+  const advDecPng = await screenshotCombinedPanels(page, panelSelectors);
+  if (!advDecPng) {
     const png = await page.screenshot({ fullPage: true, type: "png" });
     const stamp = nowStampHk();
     await postDiscordWebhook({
       webhookUrl,
       content: `StockCharts market summary (${stamp} HK) — couldn't locate Market Factors + Breadth panels. Sending full page.`,
-      filename: "stockcharts-marketsummary.png",
-      fileBytes: png,
+      files: [{ filename: "stockcharts-marketsummary.png", bytes: png }],
     });
     return;
+  }
+
+  // Image 2: click SECTOR ADV / DEC tab, then screenshot again
+  const sectorTab = page.locator(SECTOR_TAB).first();
+  if ((await sectorTab.count().catch(() => 0)) === 0) {
+    throw new Error('Could not find "SECTOR ADV / DEC" tab.');
+  }
+  await sectorTab.click();
+  await page.waitForTimeout(600);
+
+  const sectorPng = await screenshotCombinedPanels(page, panelSelectors);
+  if (!sectorPng) {
+    throw new Error("Could not capture Market Factors + Breadth after switching to SECTOR ADV / DEC.");
   }
 
   const stamp = nowStampHk();
   await postDiscordWebhook({
     webhookUrl,
-    content: `**Market Factors + Breadth (Advancing/Declining)** (${stamp} HK)`,
-    filename: "stockcharts-market-factors-breadth.png",
-    fileBytes: combined,
+    content: `**Market Factors + Breadth** (${stamp} HK)\n1) ADVANCING / DECLINING\n2) SECTOR ADV / DEC`,
+    files: [
+      { filename: "market-factors-breadth-adv-dec.png", bytes: advDecPng },
+      { filename: "market-factors-breadth-sector.png", bytes: sectorPng },
+    ],
   });
 
   await browser.close();

@@ -282,6 +282,51 @@ async function findPanelByHeading(page, headingText) {
   return null;
 }
 
+function clipToViewport(clip, viewport) {
+  const x = Math.max(0, clip.x);
+  const y = Math.max(0, clip.y);
+  const maxW = viewport?.width ?? 1440;
+  const maxH = viewport?.height ?? 900;
+  const w = Math.max(1, Math.min(clip.width + (clip.x - x), maxW - x));
+  const h = Math.max(1, Math.min(clip.height + (clip.y - y), maxH - y));
+  return { x, y, width: w, height: h };
+}
+
+async function screenshotAllPanelsByTitle(page, title) {
+  // On StockCharts dashboard, each panel is typically inside a `div.inner`.
+  const titleText = page.getByText(title, { exact: false });
+  const panels = page.locator("div.inner").filter({ has: titleText });
+
+  const count = await panels.count();
+  if (count === 0) return null;
+
+  // Scroll each panel into view so bounding boxes resolve reliably.
+  const boxes = [];
+  for (let i = 0; i < count; i++) {
+    const p = panels.nth(i);
+    await p.scrollIntoViewIfNeeded().catch(() => {});
+    await page.waitForTimeout(150);
+    const box = await p.boundingBox();
+    if (box) boxes.push(box);
+  }
+  if (boxes.length === 0) return null;
+
+  // Union bounding box of all matched panels.
+  const pad = 8;
+  const minX = Math.min(...boxes.map((b) => b.x)) - pad;
+  const minY = Math.min(...boxes.map((b) => b.y)) - pad;
+  const maxX = Math.max(...boxes.map((b) => b.x + b.width)) + pad;
+  const maxY = Math.max(...boxes.map((b) => b.y + b.height)) + pad;
+
+  const clip = clipToViewport(
+    { x: minX, y: minY, width: maxX - minX, height: maxY - minY },
+    page.viewportSize()
+  );
+
+  await page.waitForTimeout(300);
+  return await page.screenshot({ type: "png", clip });
+}
+
 async function postDiscordWebhook({ webhookUrl, content, filename, fileBytes }) {
   const form = new FormData();
   form.set("content", content);
@@ -320,8 +365,9 @@ async function main() {
   await ensureAdvDeclPanelEnabled(page);
   await page.waitForLoadState("networkidle").catch(() => {});
 
-  const panelEl = await findPanelByHeading(page, TARGET_TITLE);
-  if (!panelEl) {
+  // Goal: capture all "Advancers & Decliners" panels (e.g. Indexes + Sectors) as one combined screenshot.
+  const combined = await screenshotAllPanelsByTitle(page, TARGET_TITLE);
+  if (!combined) {
     // Fallback: full-page screenshot so you still get something useful.
     const png = await page.screenshot({ fullPage: true, type: "png" });
     const stamp = nowStampHk();
@@ -334,17 +380,12 @@ async function main() {
     return;
   }
 
-  // Ensure the element is in view and stable.
-  await panelEl.scrollIntoViewIfNeeded().catch(() => {});
-  await page.waitForTimeout(800);
-
-  const png = await panelEl.screenshot({ type: "png" });
   const stamp = nowStampHk();
   await postDiscordWebhook({
     webhookUrl,
     content: `**${TARGET_TITLE}** (${stamp} HK)`,
     filename: "advancers-decliners.png",
-    fileBytes: png,
+    fileBytes: combined,
   });
 
   await browser.close();

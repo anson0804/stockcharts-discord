@@ -105,6 +105,136 @@ async function ensureLoggedIn(page) {
   if (loginError) throw new Error("StockCharts login appears to have failed (error message detected).");
 }
 
+async function ensureAdvDeclPanelEnabled(page) {
+  // If the panel is already present, nothing to do.
+  const alreadyPresent = await page
+    .getByText(TARGET_TITLE, { exact: false })
+    .first()
+    .isVisible()
+    .catch(() => false);
+  if (alreadyPresent) return;
+
+  // Open settings dropdown (gear icon).
+  const settingsBtn = page.locator("#settings-button").first();
+  await settingsBtn.waitFor({ state: "visible", timeout: 20_000 });
+  await settingsBtn.click();
+
+  // Click "Dashboard Preferences" from the dropdown.
+  const dashboardPrefs = page
+    .getByRole("menuitem", { name: /dashboard preferences/i })
+    .first();
+  const dashboardPrefsFallback = page.getByText(/dashboard preferences/i).first();
+
+  if (await dashboardPrefs.isVisible().catch(() => false)) {
+    await dashboardPrefs.click();
+  } else {
+    await dashboardPrefsFallback.waitFor({ state: "visible", timeout: 10_000 });
+    await dashboardPrefsFallback.click();
+  }
+
+  // Preferences UI is typically a modal/dialog; wait for it to appear.
+  const dialog = page
+    .getByRole("dialog")
+    .first()
+    .or(page.locator(".modal-dialog").first());
+  await dialog.first().waitFor({ state: "visible", timeout: 20_000 }).catch(() => {});
+
+  // Go to "Additional Data Panels" section/tab.
+  const additionalTabCandidates = [
+    page.getByRole("tab", { name: /additional data panels/i }),
+    page.getByRole("button", { name: /additional data panels/i }),
+    page.getByText(/additional data panels/i),
+  ];
+
+  let openedAdditional = false;
+  for (const loc of additionalTabCandidates) {
+    const l = loc.first();
+    if (await l.isVisible().catch(() => false)) {
+      await l.click().catch(() => {});
+      openedAdditional = true;
+      break;
+    }
+  }
+  if (!openedAdditional) {
+    throw new Error('Could not find "Additional Data Panels" in Dashboard Preferences.');
+  }
+
+  // Find the "Advancers & Decliners" row and enable it.
+  const advText = page.getByText(TARGET_TITLE, { exact: false }).first();
+  await advText.waitFor({ state: "visible", timeout: 20_000 });
+
+  // Try common enable controls near the row: checkbox/toggle, Add/Enable button.
+  const rowContainer = await advText.elementHandle();
+  if (!rowContainer) throw new Error(`Found "${TARGET_TITLE}" text but could not access element handle.`);
+
+  const enableHandle = await rowContainer.evaluateHandle((el) => {
+    // Walk up to a reasonable row container.
+    let cur = el;
+    for (let i = 0; i < 8 && cur; i++) {
+      const parent = cur.parentElement;
+      if (!parent) break;
+      cur = parent;
+      const txt = (cur.innerText || "").toLowerCase();
+      if (txt.includes("advancers") && txt.includes("decliners")) return cur;
+      const cls = (cur.getAttribute("class") || "").toLowerCase();
+      if (cls.includes("row") || cls.includes("panel") || cls.includes("item")) return cur;
+    }
+    return el;
+  });
+
+  const enableEl = enableHandle.asElement();
+  if (!enableEl) throw new Error(`Could not locate container row for "${TARGET_TITLE}".`);
+
+  // Within the row, prefer clicking an unchecked checkbox/toggle; otherwise click a button labeled Add/Enable.
+  const enabled = await enableEl.evaluate((row) => {
+    const inputs = Array.from(row.querySelectorAll('input[type="checkbox"], input[type="radio"]'));
+    const checked = inputs.some((i) => (i).checked);
+    const hasEnabledText = /enabled|added|on/i.test(row.innerText || "");
+    return checked || hasEnabledText;
+  });
+
+  if (!enabled) {
+    // Try input first
+    const clicked = await enableEl.evaluate((row) => {
+      const checkbox =
+        row.querySelector('input[type="checkbox"]:not(:checked)') ||
+        row.querySelector('input[type="checkbox"]');
+      if (checkbox) {
+        (checkbox).click();
+        return true;
+      }
+      const btn = Array.from(row.querySelectorAll("button,a")).find((b) =>
+        /add|enable|show|on/i.test((b.textContent || "").trim())
+      );
+      if (btn) {
+        (btn).click();
+        return true;
+      }
+      // Sometimes the whole row is clickable (toggle).
+      (row).click();
+      return true;
+    });
+
+    if (!clicked) throw new Error(`Could not enable "${TARGET_TITLE}" panel (no toggle/button found).`);
+  }
+
+  // Save/apply if there's a save/apply button in the dialog.
+  const saveCandidates = [
+    page.getByRole("button", { name: /save|apply/i }),
+    page.getByRole("button", { name: /done|close/i }),
+  ];
+  for (const loc of saveCandidates) {
+    const l = loc.first();
+    if (await l.isVisible().catch(() => false)) {
+      await l.click().catch(() => {});
+      break;
+    }
+  }
+
+  // Give dashboard time to re-render.
+  await page.waitForTimeout(1200);
+}
+
 async function findPanelByHeading(page, headingText) {
   // Try a few strategies to be resilient to markup changes.
   const candidates = [
@@ -184,6 +314,10 @@ async function main() {
   await ensureLoggedIn(page);
 
   await page.goto(PANEL_URL, { waitUntil: "domcontentloaded" });
+  await page.waitForLoadState("networkidle").catch(() => {});
+
+  // Some dashboards require enabling the panel via settings before it appears.
+  await ensureAdvDeclPanelEnabled(page);
   await page.waitForLoadState("networkidle").catch(() => {});
 
   const panelEl = await findPanelByHeading(page, TARGET_TITLE);

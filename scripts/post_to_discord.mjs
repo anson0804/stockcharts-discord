@@ -1,6 +1,6 @@
 import { chromium } from "playwright";
 
-const PANEL_URL = "https://stockcharts.com/panels/";
+const MARKET_SUMMARY_URL = "https://stockcharts.com/freecharts/marketsummary.html";
 const LOGIN_URL = "https://stockcharts.com/login/";
 const TARGET_TITLE = "Advancers & Decliners";
 
@@ -32,10 +32,8 @@ function nowStampHk() {
 async function ensureLoggedIn(page) {
   const username = optionalEnv("STOCKCHARTS_USERNAME");
   const password = optionalEnv("STOCKCHARTS_PASSWORD");
+  if (!username || !password) return;
 
-  if (!username || !password) return; // allow public mode (will likely fail for members-only pages)
-
-  // If already logged in, do nothing.
   const alreadyLoggedIn = await page
     .locator("text=/logout/i")
     .first()
@@ -46,7 +44,6 @@ async function ensureLoggedIn(page) {
   await page.goto(LOGIN_URL, { waitUntil: "domcontentloaded" });
   await page.waitForLoadState("networkidle").catch(() => {});
 
-  // Try common form patterns: labels, placeholders, ids/names.
   const userFieldCandidates = [
     page.getByLabel(/user(name)?|email/i),
     page.locator('input[name="username"]'),
@@ -72,11 +69,7 @@ async function ensureLoggedIn(page) {
 
   const userField = await firstVisible(userFieldCandidates);
   const passField = await firstVisible(passFieldCandidates);
-  if (!userField || !passField) {
-    throw new Error(
-      "Could not find login form fields on StockCharts login page. The page layout may have changed."
-    );
-  }
+  if (!userField || !passField) throw new Error("Could not find StockCharts login fields.");
 
   await userField.fill(username);
   await passField.fill(password);
@@ -87,192 +80,19 @@ async function ensureLoggedIn(page) {
     page.locator('input[type="submit"]'),
   ];
   const submit = await firstVisible(submitCandidates);
-  if (!submit) throw new Error("Could not find login submit button on StockCharts login page.");
+  if (!submit) throw new Error("Could not find StockCharts login submit button.");
 
   await Promise.all([
     page.waitForLoadState("domcontentloaded").catch(() => {}),
     submit.click(),
   ]);
 
-  // Give the site a moment to establish session and redirect.
   await page.waitForLoadState("networkidle").catch(() => {});
-
-  const loginError = await page
-    .locator("text=/invalid|incorrect|failed|error/i")
-    .first()
-    .isVisible()
-    .catch(() => false);
-  if (loginError) throw new Error("StockCharts login appears to have failed (error message detected).");
 }
 
 async function ensureAdvDeclPanelEnabled(page) {
-  // If the panel exists anywhere in the DOM, nothing to do.
-  // (On headless runs it may be below the fold, so `isVisible()` can be false.)
-  const titleCount = await page.getByText(TARGET_TITLE, { exact: false }).count().catch(() => 0);
-  if (titleCount > 0) return;
-
-  async function findFirstScrollableInDialog() {
-    const dlg = page.getByRole("dialog").first();
-    const handle = await dlg
-      .evaluateHandle((root) => {
-        const all = Array.from(root.querySelectorAll("*"));
-        const scrollables = all.filter((el) => {
-          const style = window.getComputedStyle(el);
-          const overflowY = style.overflowY;
-          const canScroll =
-            (overflowY === "auto" || overflowY === "scroll") && el.scrollHeight > el.clientHeight + 20;
-          return canScroll;
-        });
-        // Prefer the largest scrollable (usually the list container).
-        scrollables.sort((a, b) => b.clientHeight - a.clientHeight);
-        return scrollables[0] || null;
-      })
-      .catch(() => null);
-    return handle && handle.asElement ? handle.asElement() : null;
-  }
-
-  // Open settings dropdown (gear icon).
-  const settingsBtn = page.locator("#settings-button").first();
-  await settingsBtn.waitFor({ state: "visible", timeout: 20_000 });
-  await settingsBtn.click();
-
-  // Click "Dashboard Preferences" from the dropdown.
-  const dashboardPrefs = page
-    .getByRole("menuitem", { name: /dashboard preferences/i })
-    .first();
-  const dashboardPrefsFallback = page.getByText(/dashboard preferences/i).first();
-
-  if (await dashboardPrefs.isVisible().catch(() => false)) {
-    await dashboardPrefs.click();
-  } else {
-    await dashboardPrefsFallback.waitFor({ state: "visible", timeout: 10_000 });
-    await dashboardPrefsFallback.click();
-  }
-
-  // Preferences UI is typically a modal/dialog; wait for it to appear.
-  const dialog = page
-    .getByRole("dialog")
-    .first()
-    .or(page.locator(".modal-dialog").first());
-  await dialog.first().waitFor({ state: "visible", timeout: 20_000 }).catch(() => {});
-
-  // Go to "Additional Data Panels" section/tab.
-  // IMPORTANT: This link is inside the modal (not the page), and may require scrolling.
-  const additionalLink = dialog.getByText(/additional data panels/i).first();
-  let openedAdditional = (await additionalLink.isVisible().catch(() => false)) || (await additionalLink.count()) > 0;
-
-  if (!openedAdditional) {
-    const scrollable = await findFirstScrollableInDialog();
-    for (let i = 0; i < 10 && !(await additionalLink.count().catch(() => 0)); i++) {
-      if (scrollable) {
-        await scrollable.evaluate((el) => (el.scrollTop = Math.min(el.scrollTop + el.clientHeight * 0.9, el.scrollHeight)));
-      } else {
-        await page.keyboard.press("PageDown").catch(() => {});
-      }
-      await page.waitForTimeout(200);
-    }
-  }
-
-  await additionalLink.waitFor({ state: "attached", timeout: 10_000 });
-  await additionalLink.click().catch(() => {});
-
-  // Find the "Advancers & Decliners" row and enable it.
-  // The list can be scrollable/virtualized; scroll the dialog until it appears.
-  const advText = dialog.getByText(TARGET_TITLE, { exact: false }).first();
-  let found = (await advText.count().catch(() => 0)) > 0;
-  if (!found) {
-    const scrollable = await findFirstScrollableInDialog();
-    for (let i = 0; i < 14 && !found; i++) {
-      if (scrollable) {
-        await scrollable.evaluate((el) => {
-          el.scrollTop = Math.min(el.scrollTop + el.clientHeight * 0.9, el.scrollHeight);
-        });
-      } else {
-        // Fallback: PageDown to attempt scrolling within modal.
-        await page.keyboard.press("PageDown").catch(() => {});
-      }
-      await page.waitForTimeout(250);
-      found = (await advText.count().catch(() => 0)) > 0;
-    }
-  }
-
-  if (!found) {
-    // Give up enabling; caller will fall back to full page screenshot.
-    throw new Error(
-      `Could not find "${TARGET_TITLE}" inside Dashboard Preferences > Additional Data Panels.`
-    );
-  }
-
-  // Try common enable controls near the row: checkbox/toggle, Add/Enable button.
-  const rowContainer = await advText.elementHandle();
-  if (!rowContainer) throw new Error(`Found "${TARGET_TITLE}" text but could not access element handle.`);
-
-  const enableHandle = await rowContainer.evaluateHandle((el) => {
-    // Walk up to a reasonable row container.
-    let cur = el;
-    for (let i = 0; i < 8 && cur; i++) {
-      const parent = cur.parentElement;
-      if (!parent) break;
-      cur = parent;
-      const txt = (cur.innerText || "").toLowerCase();
-      if (txt.includes("advancers") && txt.includes("decliners")) return cur;
-      const cls = (cur.getAttribute("class") || "").toLowerCase();
-      if (cls.includes("row") || cls.includes("panel") || cls.includes("item")) return cur;
-    }
-    return el;
-  });
-
-  const enableEl = enableHandle.asElement();
-  if (!enableEl) throw new Error(`Could not locate container row for "${TARGET_TITLE}".`);
-
-  // Within the row, prefer clicking an unchecked checkbox/toggle; otherwise click a button labeled Add/Enable.
-  const enabled = await enableEl.evaluate((row) => {
-    const inputs = Array.from(row.querySelectorAll('input[type="checkbox"], input[type="radio"]'));
-    const checked = inputs.some((i) => (i).checked);
-    const hasEnabledText = /enabled|added|on/i.test(row.innerText || "");
-    return checked || hasEnabledText;
-  });
-
-  if (!enabled) {
-    // Try input first
-    const clicked = await enableEl.evaluate((row) => {
-      const checkbox =
-        row.querySelector('input[type="checkbox"]:not(:checked)') ||
-        row.querySelector('input[type="checkbox"]');
-      if (checkbox) {
-        (checkbox).click();
-        return true;
-      }
-      const btn = Array.from(row.querySelectorAll("button,a")).find((b) =>
-        /add|enable|show|on/i.test((b.textContent || "").trim())
-      );
-      if (btn) {
-        (btn).click();
-        return true;
-      }
-      // Sometimes the whole row is clickable (toggle).
-      (row).click();
-      return true;
-    });
-
-    if (!clicked) throw new Error(`Could not enable "${TARGET_TITLE}" panel (no toggle/button found).`);
-  }
-
-  // Save/apply if there's a save/apply button in the dialog.
-  const saveCandidates = [
-    page.getByRole("button", { name: /save|apply/i }),
-    page.getByRole("button", { name: /done|close/i }),
-  ];
-  for (const loc of saveCandidates) {
-    const l = loc.first();
-    if (await l.isVisible().catch(() => false)) {
-      await l.click().catch(() => {});
-      break;
-    }
-  }
-
-  // Give dashboard time to re-render.
-  await page.waitForTimeout(1200);
+  // No-op for public market summary.
+  void page;
 }
 
 async function findPanelByHeading(page, headingText) {
@@ -322,6 +142,49 @@ async function findPanelByHeading(page, headingText) {
   return null;
 }
 
+async function findSectionByHeading(page, headingText) {
+  // Find a heading or label containing the section title, then walk up to a sensible container.
+  const candidates = [
+    page.getByRole("heading", { name: headingText, exact: false }),
+    page.getByText(headingText, { exact: false }),
+  ];
+
+  for (const loc of candidates) {
+    try {
+      await loc.first().waitFor({ state: "attached", timeout: 15_000 });
+      const el = await loc.first().elementHandle();
+      if (!el) continue;
+
+      const containerHandle = await el.evaluateHandle((node) => {
+        const maxHops = 10;
+        let cur = node;
+        for (let i = 0; i < maxHops && cur; i++) {
+          const parent = cur.parentElement;
+          if (!parent) break;
+          cur = parent;
+          const tag = (cur.tagName || "").toLowerCase();
+          const cls = (cur.getAttribute("class") || "").toLowerCase();
+          const id = (cur.getAttribute("id") || "").toLowerCase();
+          const txt = (cur.innerText || "").toLowerCase();
+
+          if (id.includes("adv") || cls.includes("adv") || cls.includes("declin")) return cur;
+          if (tag === "section" || tag === "table") return cur;
+          if (cls.includes("panel") || cls.includes("box") || cls.includes("module") || cls.includes("content"))
+            return cur;
+          if (txt.includes("advancers") && txt.includes("decliners") && txt.length < 5000) return cur;
+        }
+        return node;
+      });
+
+      const container = containerHandle.asElement();
+      if (container) return container;
+    } catch {
+      // try next
+    }
+  }
+  return null;
+}
+
 async function listDashboardPanelTitles(page) {
   return await page.evaluate(() => {
     const uniq = (arr) => [...new Set(arr)];
@@ -336,10 +199,10 @@ async function listDashboardPanelTitles(page) {
 
 async function warmUpDashboard(page) {
   // Some panels render lazily when scrolled into view.
-  const steps = [0.25, 0.55, 0.85, 0.0];
+  const steps = [0.2, 0.5, 0.8, 0.0];
   for (const p of steps) {
     await page.evaluate((pp) => window.scrollTo(0, document.body.scrollHeight * pp), p).catch(() => {});
-    await page.waitForTimeout(500);
+    await page.waitForTimeout(350);
   }
 }
 
@@ -417,43 +280,34 @@ async function main() {
   const page = await context.newPage();
   page.setDefaultTimeout(30_000);
 
-  await ensureLoggedIn(page);
-
-  await page.goto(PANEL_URL, { waitUntil: "domcontentloaded" });
+  await page.goto(MARKET_SUMMARY_URL, { waitUntil: "domcontentloaded" });
   await page.waitForLoadState("networkidle").catch(() => {});
-
-  // Optional auto-configuration via preferences (brittle). Default off.
-  if (optionalEnv("STOCKCHARTS_AUTO_CONFIG") === "1") {
-    await ensureAdvDeclPanelEnabled(page);
-    await page.waitForLoadState("networkidle").catch(() => {});
-  }
 
   await warmUpDashboard(page);
 
-  // Goal: capture all "Advancers & Decliners" panels (e.g. Indexes + Sectors) as one combined screenshot.
-  const combined = await screenshotAllPanelsByTitle(page, TARGET_TITLE);
-  if (!combined) {
-    // Fallback: full-page screenshot so you still get something useful.
+  const section = await findSectionByHeading(page, TARGET_TITLE);
+  if (!section) {
     const png = await page.screenshot({ fullPage: true, type: "png" });
-    const titles = await listDashboardPanelTitles(page).catch(() => []);
     const stamp = nowStampHk();
     await postDiscordWebhook({
       webhookUrl,
-      content: `StockCharts panels (${stamp} HK) — couldn't find **${TARGET_TITLE}** panels.\nFound panels: ${titles.join(
-        ", "
-      )}`.slice(0, 1900),
-      filename: "stockcharts-panels.png",
+      content: `StockCharts market summary (${stamp} HK) — couldn't locate **${TARGET_TITLE}** section. Sending full page.`,
+      filename: "stockcharts-marketsummary.png",
       fileBytes: png,
     });
     return;
   }
+
+  await section.scrollIntoViewIfNeeded().catch(() => {});
+  await page.waitForTimeout(500);
+  const png = await section.screenshot({ type: "png" });
 
   const stamp = nowStampHk();
   await postDiscordWebhook({
     webhookUrl,
     content: `**${TARGET_TITLE}** (${stamp} HK)`,
     filename: "advancers-decliners.png",
-    fileBytes: combined,
+    fileBytes: png,
   });
 
   await browser.close();

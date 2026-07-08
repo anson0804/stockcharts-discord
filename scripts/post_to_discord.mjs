@@ -1,6 +1,6 @@
 import { chromium } from "playwright";
 
-const PANELS_URL = "https://stockcharts.com/panels/";
+const MARKET_SUMMARY_URL = "https://stockcharts.com/freecharts/marketsummary.html";
 const LOGIN_URL = "https://stockcharts.com/login/";
 const TARGET_TITLE = "Advancers & Decliners";
 
@@ -282,27 +282,27 @@ async function main() {
 
   await ensureLoggedIn(page);
 
-  await page.goto(PANELS_URL, { waitUntil: "domcontentloaded" });
+  await page.goto(MARKET_SUMMARY_URL, { waitUntil: "domcontentloaded" });
   await page.waitForLoadState("networkidle").catch(() => {});
 
   await warmUpDashboard(page);
 
-  // Screenshot both A&D panels (Indexes + Sectors) as one combined clip.
-  const combined = await screenshotAllPanelsByTitle(page, TARGET_TITLE);
-  if (!combined) {
+  const section = await findSectionByHeading(page, TARGET_TITLE);
+  if (!section) {
     const png = await page.screenshot({ fullPage: true, type: "png" });
-    const titles = await listDashboardPanelTitles(page).catch(() => []);
     const stamp = nowStampHk();
     await postDiscordWebhook({
       webhookUrl,
-      content: `StockCharts panels (${stamp} HK) — couldn't find **${TARGET_TITLE}** panels.\nFound panels: ${titles.join(
-        ", "
-      )}`.slice(0, 1900),
-      filename: "stockcharts-panels.png",
+      content: `StockCharts market summary (${stamp} HK) — couldn't locate **${TARGET_TITLE}** section. Sending full page.`,
+      filename: "stockcharts-marketsummary.png",
       fileBytes: png,
     });
     return;
   }
+
+  await section.scrollIntoViewIfNeeded().catch(() => {});
+  await page.waitForTimeout(500);
+  const combined = await section.screenshot({ type: "png" });
 
   const stamp = nowStampHk();
   await postDiscordWebhook({

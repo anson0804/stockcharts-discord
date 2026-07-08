@@ -3,7 +3,7 @@ name: Post StockCharts Advancers & Decliners
 on:
   schedule:
     # 10:00 Hong Kong (UTC+8) == 02:00 UTC
-    - cron: "0 2 * * *"
+    - cron: "0 2 * * 2-6"
   workflow_dispatch: {}
 
 permissions:

@@ -322,6 +322,27 @@ async function findPanelByHeading(page, headingText) {
   return null;
 }
 
+async function listDashboardPanelTitles(page) {
+  return await page.evaluate(() => {
+    const uniq = (arr) => [...new Set(arr)];
+    const titles = uniq(
+      Array.from(document.querySelectorAll(".panel-grid-title, #header-title"))
+        .map((el) => (el.textContent || "").trim())
+        .filter(Boolean)
+    );
+    return titles.slice(0, 50);
+  });
+}
+
+async function warmUpDashboard(page) {
+  // Some panels render lazily when scrolled into view.
+  const steps = [0.25, 0.55, 0.85, 0.0];
+  for (const p of steps) {
+    await page.evaluate((pp) => window.scrollTo(0, document.body.scrollHeight * pp), p).catch(() => {});
+    await page.waitForTimeout(500);
+  }
+}
+
 function clipToViewport(clip, viewport) {
   const x = Math.max(0, clip.x);
   const y = Math.max(0, clip.y);
@@ -401,34 +422,26 @@ async function main() {
   await page.goto(PANEL_URL, { waitUntil: "domcontentloaded" });
   await page.waitForLoadState("networkidle").catch(() => {});
 
-  // Some dashboards require enabling the panel via settings before it appears.
-  try {
+  // Optional auto-configuration via preferences (brittle). Default off.
+  if (optionalEnv("STOCKCHARTS_AUTO_CONFIG") === "1") {
     await ensureAdvDeclPanelEnabled(page);
-  } catch (e) {
-    // Don't fail the whole workflow; send a debug screenshot so we can refine selectors.
-    const png = await page.screenshot({ fullPage: true, type: "png" }).catch(() => null);
-    if (png) {
-      const stamp = nowStampHk();
-      await postDiscordWebhook({
-        webhookUrl,
-        content: `StockCharts (${stamp} HK) — couldn't enable **${TARGET_TITLE}** panel automatically. Sending debug screenshot.`,
-        filename: "stockcharts-debug.png",
-        fileBytes: png,
-      });
-    }
-    throw e;
+    await page.waitForLoadState("networkidle").catch(() => {});
   }
-  await page.waitForLoadState("networkidle").catch(() => {});
+
+  await warmUpDashboard(page);
 
   // Goal: capture all "Advancers & Decliners" panels (e.g. Indexes + Sectors) as one combined screenshot.
   const combined = await screenshotAllPanelsByTitle(page, TARGET_TITLE);
   if (!combined) {
     // Fallback: full-page screenshot so you still get something useful.
     const png = await page.screenshot({ fullPage: true, type: "png" });
+    const titles = await listDashboardPanelTitles(page).catch(() => []);
     const stamp = nowStampHk();
     await postDiscordWebhook({
       webhookUrl,
-      content: `StockCharts panels (${stamp} HK) — couldn't isolate **${TARGET_TITLE}**, sending full page.`,
+      content: `StockCharts panels (${stamp} HK) — couldn't find **${TARGET_TITLE}** panels.\nFound panels: ${titles.join(
+        ", "
+      )}`.slice(0, 1900),
       filename: "stockcharts-panels.png",
       fileBytes: png,
     });

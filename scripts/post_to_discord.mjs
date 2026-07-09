@@ -32,6 +32,108 @@ function nowStampHk() {
   return fmt.format(dt).replaceAll("/", "-").replace(", ", " ");
 }
 
+function toDateKey(year, month, day) {
+  return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+}
+
+function getHkYmd(date = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Hong_Kong",
+    year: "numeric",
+    month: "numeric",
+    day: "numeric",
+  }).formatToParts(date);
+  const get = (type) => Number(parts.find((p) => p.type === type)?.value);
+  return { year: get("year"), month: get("month"), day: get("day") };
+}
+
+function shiftHkYmd({ year, month, day }, deltaDays) {
+  const d = new Date(`${toDateKey(year, month, day)}T12:00:00+08:00`);
+  d.setUTCDate(d.getUTCDate() + deltaDays);
+  return getHkYmd(d);
+}
+
+function observeFixedHoliday(year, month, day) {
+  const utc = new Date(Date.UTC(year, month - 1, day));
+  const dow = utc.getUTCDay();
+  if (dow === 6) return toDateKey(year, month, day - 1);
+  if (dow === 0) return toDateKey(year, month, day + 1);
+  return toDateKey(year, month, day);
+}
+
+function nthWeekday(year, month, weekday, n) {
+  const first = new Date(Date.UTC(year, month - 1, 1));
+  const offset = (weekday - first.getUTCDay() + 7) % 7;
+  const day = 1 + offset + (n - 1) * 7;
+  return toDateKey(year, month, day);
+}
+
+function lastWeekday(year, month, weekday) {
+  const last = new Date(Date.UTC(year, month, 0));
+  const offset = (last.getUTCDay() - weekday + 7) % 7;
+  return toDateKey(year, month, last.getUTCDate() - offset);
+}
+
+function easterSunday(year) {
+  const a = year % 19;
+  const b = Math.floor(year / 100);
+  const c = year % 100;
+  const d = Math.floor(b / 4);
+  const e = b % 4;
+  const f = Math.floor((b + 8) / 25);
+  const g = Math.floor((b - f + 1) / 3);
+  const h = (19 * a + b - d - g + 15) % 30;
+  const i = Math.floor(c / 4);
+  const k = c % 4;
+  const l = (32 + 2 * e + 2 * i - h - k) % 7;
+  const m = Math.floor((a + 11 * h + 22 * l) / 451);
+  const month = Math.floor((h + l - 7 * m + 114) / 31);
+  const day = ((h + l - 7 * m + 114) % 31) + 1;
+  return { year, month, day };
+}
+
+function goodFriday(year) {
+  const e = easterSunday(year);
+  const d = new Date(Date.UTC(e.year, e.month - 1, e.day));
+  d.setUTCDate(d.getUTCDate() - 2);
+  return toDateKey(d.getUTCFullYear(), d.getUTCMonth() + 1, d.getUTCDate());
+}
+
+function usMarketHolidayKeys(year) {
+  return [
+    observeFixedHoliday(year, 1, 1),
+    nthWeekday(year, 1, 1, 3),
+    nthWeekday(year, 2, 1, 3),
+    goodFriday(year),
+    lastWeekday(year, 5, 1),
+    observeFixedHoliday(year, 6, 19),
+    observeFixedHoliday(year, 7, 4),
+    nthWeekday(year, 9, 1, 1),
+    nthWeekday(year, 11, 4, 4),
+    observeFixedHoliday(year, 12, 25),
+  ];
+}
+
+function shouldSkipScheduledRun() {
+  const today = getHkYmd();
+  const yesterday = shiftHkYmd(today, -1);
+  const yesterdayKey = toDateKey(yesterday.year, yesterday.month, yesterday.day);
+
+  const years = new Set([today.year, yesterday.year]);
+  const holidays = new Set();
+  for (const y of years) {
+    for (const k of usMarketHolidayKeys(y)) holidays.add(k);
+  }
+
+  if (holidays.has(yesterdayKey)) {
+    console.log(
+      `Skip: ${toDateKey(today.year, today.month, today.day)} HK is the day after US market holiday (${yesterdayKey}).`
+    );
+    return true;
+  }
+  return false;
+}
+
 async function ensureLoggedIn(page) {
   const username = optionalEnv("STOCKCHARTS_USERNAME");
   const password = optionalEnv("STOCKCHARTS_PASSWORD");
@@ -146,7 +248,9 @@ async function stitchHorizontal(buffers, gap = 12) {
 
 async function postDiscordWebhook({ webhookUrl, content, filename, fileBytes }) {
   const form = new FormData();
-  form.set("content", content);
+  if (content && String(content).trim()) {
+    form.set("content", content);
+  }
   form.append("file", new Blob([fileBytes], { type: "image/png" }), filename);
 
   const resp = await fetch(webhookUrl, { method: "POST", body: form });
@@ -157,6 +261,10 @@ async function postDiscordWebhook({ webhookUrl, content, filename, fileBytes }) 
 }
 
 async function main() {
+  if (process.env.FORCE_RUN !== "1" && shouldSkipScheduledRun()) {
+    return;
+  }
+
   const webhookUrl = requireEnv("DISCORD_WEBHOOK_URL");
 
   const browser = await chromium.launch({
@@ -209,10 +317,9 @@ async function main() {
 
   const combined = await stitchHorizontal([marketFactorsPng, breadthAdvDecPng, breadthSectorPng]);
 
-  const stamp = nowStampHk();
   await postDiscordWebhook({
     webhookUrl,
-    content: `**Market Summary** (${stamp} HK) — Market Factors | Adv/Dec | Sector Adv/Dec`,
+    content: "",
     filename: "market-summary-combined.png",
     fileBytes: combined,
   });

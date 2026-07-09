@@ -1,6 +1,8 @@
 # stockcharts-discord
 
-每天香港時間 10:00，自動從 `https://stockcharts.com/panels/` 擷取 **Advancers & Decliners** 區塊截圖，並透過 Discord Webhook 發到指定頻道（使用 GitHub Actions 排程）。
+每天香港時間 10:00，自動從 `https://stockcharts.com/freecharts/marketsummary.html` 擷取 **Market Factors** 與 **Breadth（Adv/Dec + Sector）** 面板，橫向拼成一張圖，透過 Discord Webhook 發到指定頻道（**只發圖片、不發文字**）。
+
+排程使用 [cron-job.org](https://console.cron-job.org/dashboard) 觸發 GitHub Actions。
 
 ## 你需要準備的東西
 
@@ -8,40 +10,45 @@
 
 - 在 Discord：目標頻道 → **Edit Channel** → **Integrations** → **Webhooks** → **New Webhook** → **Copy Webhook URL**
 
-### 2) StockCharts 會員帳號（用來登入 panels）
+### 2) GitHub Secrets
 
-因為 `https://stockcharts.com/panels/` 需要會員登入，這個 workflow 會先自動登入再截圖。
+在你的 GitHub repo → Settings → Secrets and variables → Actions：
 
-### 3) GitHub Secrets
+- `DISCORD_WEBHOOK_URL`
+- `STOCKCHARTS_USERNAME`
+- `STOCKCHARTS_PASSWORD`
 
-在你的 GitHub repo：
+### 3) GitHub Personal Access Token（給 cron-job.org 用）
 
-- Settings → Secrets and variables → Actions → **New repository secret**
-- `DISCORD_WEBHOOK_URL`：貼上你的 Discord Webhook URL
-- `STOCKCHARTS_USERNAME`：你的 StockCharts 登入帳號（或 email）
-- `STOCKCHARTS_PASSWORD`：你的 StockCharts 密碼
+建立一個 PAT（Fine-grained 或 classic），權限需能觸發 Actions：`actions:write`（或 repo 範圍內 workflow 權限）。
 
-## 觸發方式
+## cron-job.org 設定
 
-- **自動排程**：每天香港時間 10:00（GitHub Actions cron：`0 2 * * *`，UTC 02:00）
-- **手動觸發**：GitHub Actions → `Post StockCharts Advancers & Decliners` → Run workflow
+在 [cron-job.org Dashboard](https://console.cron-job.org/dashboard) 新增 **Cronjob**：
+
+| 欄位 | 值 |
+|------|-----|
+| **Title** | StockCharts Market Summary |
+| **URL** | `https://api.github.com/repos/anson0804/stockcharts-discord/actions/workflows/daily.yml/dispatches` |
+| **Method** | `POST` |
+| **Schedule** | 每天 **10:00**，時區選 **Asia/Hong_Kong**，星期 **二–六**（`2-6`） |
+| **Request body** | `{"ref":"main"}` |
+| **Header** | `Accept: application/vnd.github+json` |
+| **Header** | `Authorization: Bearer <你的_GITHUB_PAT>` |
+| **Content-Type** | `application/json` |
+
+腳本會自動跳過「美國股市假期隔天」。若要強制執行，在 GitHub Actions 手動 Run workflow 並在 env 設 `FORCE_RUN=1`（可選）。
+
+## 手動觸發（測試）
+
+GitHub → **Actions** → `Post StockCharts Advancers & Decliners` → **Run workflow**
 
 ## 本機測試（可選）
 
-```bash
-npm install
-npm run install-browsers
-set DISCORD_WEBHOOK_URL=你的Webhook && npm run post
-```
-
-（Windows PowerShell 也可以用）
-
 ```powershell
 $env:DISCORD_WEBHOOK_URL="你的Webhook"
+$env:STOCKCHARTS_USERNAME="你的帳號"
+$env:STOCKCHARTS_PASSWORD="你的密碼"
+npm install
 npm run post
 ```
-
-## 備註
-
-- 這個腳本會嘗試只截「Advancers & Decliners」那張卡片；如果網站 DOM 結構變動導致找不到，會退回改發整頁截圖，避免完全沒訊息。
-

@@ -29,10 +29,10 @@
 | 欄位 | 值 |
 |------|-----|
 | **Title** | StockCharts Market Summary |
-| **URL** | `https://api.github.com/repos/anson0804/stockcharts-discord/actions/workflows/daily.yml/dispatches` |
+| **URL** | `https://api.github.com/repos/anson0804/stockcharts-discord/dispatches` |
 | **Method** | `POST` |
 | **Schedule** | 每天 **10:00**，時區選 **Asia/Hong_Kong**，星期 **二–六**（`2-6`） |
-| **Request body** | `{"ref":"main"}` |
+| **Request body** | `{"event_type":"cron-post"}` |
 | **Header** | `Accept: application/vnd.github+json` |
 | **Header** | `Authorization: Bearer <你的_GITHUB_PAT>` |
 | **Content-Type** | `application/json` |

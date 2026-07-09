@@ -1,6 +1,8 @@
 name: Post StockCharts Advancers & Decliners
 
 on:
+  repository_dispatch:
+    types: [cron-post]
   workflow_dispatch: {}
 
 permissions:
@@ -13,6 +15,11 @@ jobs:
     container:
       image: mcr.microsoft.com/playwright:v1.61.1-jammy
     steps:
+      - name: Show trigger info
+        run: |
+          echo "event_name=${{ github.event_name }}"
+          echo "action=${{ github.event.action }}"
+
       - name: Checkout
         uses: actions/checkout@v4
 

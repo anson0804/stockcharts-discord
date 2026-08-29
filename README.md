@@ -2,7 +2,7 @@
 
 每天香港時間 10:00，自動從 `https://stockcharts.com/freecharts/marketsummary.html` 擷取 **Market Factors** 與 **Breadth（Adv/Dec + Sector）** 面板，橫向拼成一張圖，透過 Discord Webhook 發到指定頻道（**只發圖片、不發文字**）。
 
-排程使用 [cron-job.org](https://console.cron-job.org/dashboard) 觸發 GitHub Actions。
+排程使用 [cron-job.org](https://console.cron-job.org/dashboard) 觸發 GitHub Actions。成功執行後，截圖會一併提交到 [`screenshots/`](screenshots/)（香港時區日期的 `YYYY-MM-DD.png`，以及永遠指向最新一張的 `latest.png`），方便之後從 GitHub 讀取。
 
 ## 你需要準備的東西
 

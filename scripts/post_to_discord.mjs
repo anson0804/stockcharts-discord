@@ -1,5 +1,6 @@
 import { chromium } from "playwright";
 import sharp from "sharp";
+import { saveScreenshotToRepo } from "./save_screenshot.mjs";
 
 const MARKET_SUMMARY_URL = "https://stockcharts.com/freecharts/marketsummary.html";
 const LOGIN_URL = "https://stockcharts.com/login/";
@@ -246,6 +247,17 @@ async function stitchHorizontal(buffers, gap = 12) {
     .toBuffer();
 }
 
+async function saveScreenshotToRepoSafe(fileBytes) {
+  try {
+    const today = getHkYmd();
+    await saveScreenshotToRepo(fileBytes, {
+      dateKey: toDateKey(today.year, today.month, today.day),
+    });
+  } catch (err) {
+    console.error(`Warning: failed to write screenshot files: ${err?.stack || err}`);
+  }
+}
+
 async function postDiscordWebhook({ webhookUrl, content, filename, fileBytes }) {
   const form = new FormData();
   if (content && String(content).trim()) {
@@ -312,6 +324,7 @@ async function main() {
       filename: "stockcharts-marketsummary.png",
       fileBytes: png,
     });
+    await saveScreenshotToRepoSafe(png);
     return;
   }
 
@@ -323,6 +336,8 @@ async function main() {
     filename: "market-summary-combined.png",
     fileBytes: combined,
   });
+
+  await saveScreenshotToRepoSafe(combined);
 
   await browser.close();
 }
